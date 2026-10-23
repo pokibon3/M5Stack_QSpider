@@ -47,6 +47,7 @@ const String HTTP_Page[] = {
 "  <input class='button3' type='button' name='SPIN_R' value='SPIN_R' onclick='spin_r()'><br>",
 "</form>",
 "<br>",
+"<p><a href='/cal'>Leg Center Calibration</a></p>",
 
 "<script>",
 //reload

@@ -1,6 +1,7 @@
 #include <M5Unified.h>
 
 #include "wifi_setup.h"
+#include <Preferences.h>
 
 #include "avatar.h"
 
@@ -16,6 +17,7 @@
 * for Wifi Connection
 *********************************/
 #include "WebPage.h"
+#include "CalPage.h"
 char OTAHostPrefix[]= "ESP32OTA-";
 char WiFiAPPrefix[] = "ESP32-";
 
@@ -71,6 +73,24 @@ const int maxUs = 2400;
 #define CENT_RR1 95   // leg backword ++
 #define CENT_RL1 82   // leg backword --
 
+#define SERVO_NUM 8
+
+// default center of each channel (CH1-CH8)
+const int centDefault[SERVO_NUM] = {
+  CENT_FR0, CENT_FR1, CENT_FL0, CENT_FL1,
+  CENT_RR0, CENT_RR1, CENT_RL0, CENT_RL1
+};
+// +1: angle increases for knee up / leg forward, -1: decreases
+const int servoDir[SERVO_NUM] = {
+  1, 1, -1, -1,
+  -1, -1, 1, 1
+};
+// current center (calibrated from Web, saved to NVS)
+int cent[SERVO_NUM];
+bool centDirty = false;
+
+Preferences prefs;
+
 const int stp = 3;
 const int smooth = 5;
 
@@ -110,6 +130,10 @@ void setServoPulse(uint8_t n, uint16_t pulse_us);
 void setServoAngle(uint8_t n, int ang);
 void setServoLed(uint8_t r, uint8_t g, uint8_t b);
 void adjMode();
+void loadCenter();
+void saveCenter();
+void handleCalApi(WiFiClient &client, const String &req);
+String getParam(const String &req, const char *name);
 void avatarUpdate();
 
 void setup() {
@@ -132,6 +156,7 @@ void setup() {
     Serial.println("Hat 8Servos not found");
   }
   setServoLed(0, 32, 0);
+  loadCenter();
   delay(10);
 
   // Wifi and OTA setup
@@ -246,6 +271,21 @@ void loop(){
           if (currentLine.length() == 0){
             // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
             // and a content-type so the client knows what's coming, then a blank line:
+            // request line (e.g. "GET /api/cal?adj=0&d=1 HTTP/1.1")
+            String req = header.substring(0, header.indexOf('\n'));
+            if(req.startsWith("GET /api/cal")){
+              handleCalApi(client, req);
+              break;
+            }
+            if(req.startsWith("GET /cal")){
+              client.println("HTTP/1.1 200 OK");
+              client.println("Content-type:text/html; charset=utf-8");
+              client.println("Connection: close");
+              client.println();
+              client.print(CAL_Page);
+              break;
+            }
+
             client.println("HTTP/1.1 200 OK");
             client.println("Content-type:text/html");
             client.println("Connection: close");
@@ -743,23 +783,105 @@ void servoLegClose(int ang){
  * Servo position by angle
  ************************************/
 void moveServo(int n, int deltaAngle){
-  if(n == FR1){
-     setServoAngle(n, CENT_FR1 + deltaAngle);
-  }else if(n == FL1){
-     setServoAngle(n, CENT_FL1 - deltaAngle);
-  }else if(n == RR1){
-     setServoAngle(n, CENT_RR1 - deltaAngle);
-  }else if(n == RL1){
-     setServoAngle(n, CENT_RL1 + deltaAngle);
-  }else if(n == FR0){
-     setServoAngle(n, CENT_FR0 + deltaAngle);
-  }else if(n == FL0){
-     setServoAngle(n, CENT_FL0 - deltaAngle);
-  }else if(n == RR0){
-     setServoAngle(n, CENT_RR0 - deltaAngle);
-  }else if(n == RL0){
-     setServoAngle(n, CENT_RL0 + deltaAngle);
+  if(n < 0 || n >= SERVO_NUM){
+    return;
   }
+  setServoAngle(n, cent[n] + servoDir[n] * deltaAngle);
+}
+
+/************************************
+ * Center calibration (saved to NVS)
+ ************************************/
+void loadCenter(){
+  uint8_t buf[SERVO_NUM];
+  prefs.begin("spider", false);   // read-only open fails before first save
+  size_t len = prefs.isKey("cent") ? prefs.getBytes("cent", buf, sizeof(buf)) : 0;
+  prefs.end();
+  for(int i = 0; i < SERVO_NUM; i++){
+    cent[i] = (len == sizeof(buf)) ? buf[i] : centDefault[i];
+  }
+  centDirty = false;
+}
+
+void saveCenter(){
+  uint8_t buf[SERVO_NUM];
+  for(int i = 0; i < SERVO_NUM; i++){
+    buf[i] = cent[i];
+  }
+  prefs.begin("spider", false);
+  prefs.putBytes("cent", buf, sizeof(buf));
+  prefs.end();
+  centDirty = false;
+}
+
+String getParam(const String &req, const char *name){
+  String key = String(name) + "=";
+  int start = req.indexOf("?" + key);
+  if(start < 0){
+    start = req.indexOf("&" + key);
+  }
+  if(start < 0){
+    return "";
+  }
+  start += key.length() + 1;
+  int end = start;
+  while(end < (int)req.length() && req[end] != '&' && req[end] != ' '){
+    end++;
+  }
+  return req.substring(start, end);
+}
+
+// /api/cal?adj=<ch>&d=<+-deg> | home=1 | save=1 | load=1 | reset=1
+// d is in physical direction (+ = knee up / leg forward)
+void handleCalApi(WiFiClient &client, const String &req){
+  String adj = getParam(req, "adj");
+  if(adj.length() > 0){
+    int ch = adj.toInt();
+    int d = getParam(req, "d").toInt();
+    if(ch >= 0 && ch < SERVO_NUM){
+      cent[ch] = constrain(cent[ch] + servoDir[ch] * d, 0, 180);
+      centDirty = true;
+      moveServo(ch, 0);
+    }
+  }
+  if(getParam(req, "save").length() > 0){
+    saveCenter();
+  }
+  if(getParam(req, "load").length() > 0){
+    loadCenter();
+    servoHome();
+  }
+  if(getParam(req, "reset").length() > 0){
+    for(int i = 0; i < SERVO_NUM; i++){
+      cent[i] = centDefault[i];
+    }
+    centDirty = true;
+    servoHome();
+  }
+  if(getParam(req, "home").length() > 0){
+    servoHome();
+  }
+
+  String json = "{\"cent\":[";
+  for(int i = 0; i < SERVO_NUM; i++){
+    json += (i ? "," : "") + String(cent[i]);
+  }
+  json += "],\"def\":[";
+  for(int i = 0; i < SERVO_NUM; i++){
+    json += (i ? "," : "") + String(centDefault[i]);
+  }
+  json += "],\"dir\":[";
+  for(int i = 0; i < SERVO_NUM; i++){
+    json += (i ? "," : "") + String(servoDir[i]);
+  }
+  json += "],\"dirty\":";
+  json += centDirty ? "true}" : "false}";
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:application/json");
+  client.println("Connection: close");
+  client.println();
+  client.print(json);
 }
 
 /*************************************************** 
