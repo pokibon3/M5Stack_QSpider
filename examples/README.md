@@ -12,6 +12,7 @@ This folder contains Arduino sketches for controlling the M5Stack Q-Spider quadr
 |---|---|
 | `M5_Spider_Webserver` | Control the robot from a web browser via WiFi. WiFi経由のWebブラウザから操作します。 |
 | `M5_Spider_esp-now` | Control the robot with a game controller using ESP-NOW communication. ESP-NOW通信でゲームコントローラから操作します。 |
+| `M5StickC_Spider_Webserver` | PlatformIO port of `M5_Spider_Webserver` for M5StickC + Hat 8Servos (8 servos, no TILT, AP password `esp32spider`). `M5_Spider_Webserver`をM5StickC + Hat 8Servos向けに移植したPlatformIO版です（サーボ8個、TILTなし、APパスワード`esp32spider`）。 |
 | `M5StickC_Hat8Servos` | PlatformIO sample for M5StickC + Hat 8Servos. M5StickCとHat 8Servosを使ったPlatformIOサンプルです。 |
 | `ESP32_ChipInfo` | Utility sketch to check the ESP32 chip info and MAC address. ESP32のチップ情報とMACアドレスを確認するユーティリティスケッチです。 |
 
